@@ -35,7 +35,7 @@ export function createLinePlugin(params: LinePluginParams): ChannelPlugin<Gatewa
 
         const channelSecret = process.env.LINE_CHANNEL_SECRET!;
         const channelAccessToken = process.env.LINE_CHANNEL_ACCESS_TOKEN!;
-        const port = parseInt(process.env.WEBHOOK_PORT || '3000', 10);
+        const port = parseInt(process.env.PORT || process.env.WEBHOOK_PORT || '3000', 10);
 
         const client = new messagingApi.MessagingApiClient({ channelAccessToken });
 
