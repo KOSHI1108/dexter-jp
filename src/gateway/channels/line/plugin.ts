@@ -3,6 +3,7 @@ import type { InboundMessage } from '../../types.js';
 import type { GatewayConfig } from '../../config.js';
 import { logger } from '../../../utils/logger.js';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { registerHttpRoute, getSharedHttpServer } from '../../http-server.js';
 
 type LineAccountConfig = {
   enabled: boolean;
@@ -16,7 +17,8 @@ type LinePluginParams = {
 /**
  * Create a LINE channel plugin using Messaging API webhooks.
  * Requires: LINE_CHANNEL_SECRET + LINE_CHANNEL_ACCESS_TOKEN environment variables.
- * Starts a local HTTP server to receive webhook events from LINE Platform.
+ * In cloud environments (PORT set), registers on the shared HTTP server.
+ * In local environments, starts a standalone HTTP server on WEBHOOK_PORT.
  */
 export function createLinePlugin(params: LinePluginParams): ChannelPlugin<GatewayConfig, LineAccountConfig> {
   return {
@@ -35,7 +37,6 @@ export function createLinePlugin(params: LinePluginParams): ChannelPlugin<Gatewa
 
         const channelSecret = process.env.LINE_CHANNEL_SECRET!;
         const channelAccessToken = process.env.LINE_CHANNEL_ACCESS_TOKEN!;
-        const port = parseInt(process.env.WEBHOOK_PORT || '3000', 10);
 
         const client = new messagingApi.MessagingApiClient({ channelAccessToken });
 
@@ -46,9 +47,9 @@ export function createLinePlugin(params: LinePluginParams): ChannelPlugin<Gatewa
           botUserId = profile.userId;
         } catch { /* ignore */ }
 
-        const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
-          if (req.method !== 'POST' || req.url !== '/webhook/line') {
-            res.writeHead(404);
+        const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
+          if (req.method !== 'POST') {
+            res.writeHead(405);
             res.end();
             return;
           }
@@ -147,19 +148,40 @@ export function createLinePlugin(params: LinePluginParams): ChannelPlugin<Gatewa
 
             await params.onMessage(inbound);
           }
-        });
+        };
 
-        server.listen(port, () => {
+        if (getSharedHttpServer()) {
+          // Cloud: shared HTTP server already running, just register the route
+          registerHttpRoute('/webhook/line', handleRequest);
           ctx.setStatus({ connected: true });
-          logger.info(`[LINE] Webhook server listening on port ${port}`);
-        });
+          logger.info(`[LINE] Webhook handler registered on shared HTTP server`);
 
-        // Keep alive until abort
-        await new Promise<void>((resolve) => {
-          ctx.abortSignal.addEventListener('abort', () => {
-            server.close(() => resolve());
+          await new Promise<void>((resolve) => {
+            ctx.abortSignal.addEventListener('abort', resolve);
           });
-        });
+        } else {
+          // Local: start a standalone HTTP server
+          const port = parseInt(process.env.WEBHOOK_PORT || '3000', 10);
+          const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
+            if (req.url !== '/webhook/line') {
+              res.writeHead(404);
+              res.end();
+              return;
+            }
+            await handleRequest(req, res);
+          });
+
+          server.listen(port, () => {
+            ctx.setStatus({ connected: true });
+            logger.info(`[LINE] Webhook server listening on port ${port}`);
+          });
+
+          await new Promise<void>((resolve) => {
+            ctx.abortSignal.addEventListener('abort', () => {
+              server.close(() => resolve());
+            });
+          });
+        }
       },
     },
   };
