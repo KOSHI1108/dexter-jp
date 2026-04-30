@@ -123,26 +123,20 @@ async function run(): Promise<void> {
     return;
   }
 
-  const server = await startGateway();
-  console.log('Dexter gateway running. Press Ctrl+C to stop.');
-
-  // Minimal HTTP health check for Cloud Run (requires a PORT listener)
+  // Start shared HTTP server before gateway so LINE plugin can register its route
   const port = process.env.PORT;
   if (port) {
-    const { createServer } = await import('node:http');
-    const httpServer = createServer((req, res) => {
-      if (req.url === '/health') {
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ status: 'ok', gateway: 'running' }));
-      } else {
-        res.writeHead(404);
-        res.end();
-      }
+    const { startSharedHttpServer, registerHttpRoute } = await import('./http-server.js');
+    registerHttpRoute('/health', (_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ status: 'ok', gateway: 'running' }));
     });
-    httpServer.listen(parseInt(port, 10), () => {
-      console.log(`Health check server listening on port ${port}`);
-    });
+    await startSharedHttpServer(parseInt(port, 10));
+    console.log(`HTTP server listening on port ${port}`);
   }
+
+  const server = await startGateway();
+  console.log('Dexter gateway running. Press Ctrl+C to stop.');
 
   const shutdown = async () => {
     await server.stop();
