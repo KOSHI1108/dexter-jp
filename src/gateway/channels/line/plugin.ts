@@ -1,12 +1,14 @@
 import type { ChannelPlugin, ChannelStartContext } from '../types.js';
 import type { InboundMessage } from '../../types.js';
 import type { GatewayConfig } from '../../config.js';
+import { checkInboundAccessControl } from '../../access-control.js';
 import { logger } from '../../../utils/logger.js';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { registerHttpRoute, getSharedHttpServer } from '../../http-server.js';
 
 type LineAccountConfig = {
   enabled: boolean;
+  groupPolicy: 'open' | 'disabled';
 };
 
 type LinePluginParams = {
@@ -27,7 +29,14 @@ export function createLinePlugin(params: LinePluginParams): ChannelPlugin<Gatewa
       listAccountIds: () => {
         return process.env.LINE_CHANNEL_ACCESS_TOKEN ? ['default'] : [];
       },
-      resolveAccount: () => ({ enabled: true }),
+      resolveAccount: (cfg: GatewayConfig, accountId: string) => {
+        const accounts = (cfg.channels.line?.accounts ?? {}) as any;
+        const account = accounts[accountId] as any;
+        return {
+          enabled: account?.enabled ?? true,
+          groupPolicy: (account?.groupPolicy ?? 'disabled') as 'open' | 'disabled',
+        };
+      },
       isEnabled: (account) => account.enabled,
       isConfigured: () => Boolean(process.env.LINE_CHANNEL_SECRET && process.env.LINE_CHANNEL_ACCESS_TOKEN),
     },
@@ -105,6 +114,18 @@ export function createLinePlugin(params: LinePluginParams): ChannelPlugin<Gatewa
             const groupId = source.groupId as string | undefined;
             const isGroup = source.type === 'group' || source.type === 'room';
 
+            // Check access control for group messages
+            if (isGroup) {
+              const cfg = params.loadConfig();
+              const account = cfg.channels.line?.accounts?.[ctx.accountId];
+              const groupPolicy = (account?.groupPolicy ?? 'disabled') as 'open' | 'disabled';
+
+              if (groupPolicy !== 'open') {
+                logger.debug(`[LINE] Group message blocked: groupPolicy=${groupPolicy}`);
+                continue;
+              }
+            }
+
             // Get user profile for display name
             let senderName = userId;
             try {
@@ -157,7 +178,8 @@ export function createLinePlugin(params: LinePluginParams): ChannelPlugin<Gatewa
           logger.info(`[LINE] Webhook handler registered on shared HTTP server`);
 
           await new Promise<void>((resolve) => {
-            ctx.abortSignal.addEventListener('abort', resolve);
+            const abortHandler = () => resolve();
+            ctx.abortSignal.addEventListener('abort', abortHandler as EventListener);
           });
         } else {
           // Local: start a standalone HTTP server

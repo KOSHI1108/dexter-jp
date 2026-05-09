@@ -26,6 +26,12 @@ const WhatsAppAccountSchema = z.object({
   sendReadReceipts: z.boolean().optional().default(true),
 });
 
+const LineAccountSchema = z.object({
+  name: z.string().optional(),
+  enabled: z.boolean().optional().default(true),
+  groupPolicy: z.enum(['open', 'disabled']).optional().default('disabled'),
+});
+
 const HeartbeatConfigSchema = z
   .object({
     enabled: z.boolean().optional().default(false),
@@ -62,6 +68,12 @@ const GatewayConfigSchema = z.object({
           enabled: z.boolean().optional(),
           accounts: z.record(z.string(), WhatsAppAccountSchema).optional(),
           allowFrom: z.array(z.string()).optional(),
+        })
+        .optional(),
+      line: z
+        .object({
+          enabled: z.boolean().optional(),
+          accounts: z.record(z.string(), LineAccountSchema).optional(),
         })
         .optional(),
     })
@@ -109,6 +121,10 @@ export type GatewayConfig = {
       accounts: Record<string, z.infer<typeof WhatsAppAccountSchema>>;
       allowFrom: string[];
     };
+    line: {
+      enabled: boolean;
+      accounts: Record<string, z.infer<typeof LineAccountSchema>>;
+    };
   };
   bindings: Array<{
     agentId: string;
@@ -132,6 +148,13 @@ export type WhatsAppAccountConfig = {
   sendReadReceipts: boolean;
 };
 
+export type LineAccountConfig = {
+  accountId: string;
+  name?: string;
+  enabled: boolean;
+  groupPolicy: 'open' | 'disabled';
+};
+
 export function getGatewayConfigPath(overridePath?: string): string {
   return overridePath ?? process.env.DEXTER_GATEWAY_CONFIG ?? DEFAULT_GATEWAY_PATH;
 }
@@ -141,7 +164,7 @@ export function loadGatewayConfig(overridePath?: string): GatewayConfig {
   if (!existsSync(path)) {
     return {
       gateway: { accountId: 'default', logLevel: 'info' },
-      channels: { whatsapp: { enabled: true, accounts: {}, allowFrom: [] } },
+      channels: { whatsapp: { enabled: true, accounts: {}, allowFrom: [] }, line: { enabled: false, accounts: {} } },
       bindings: [],
     };
   }
@@ -171,6 +194,10 @@ export function loadGatewayConfig(overridePath?: string): GatewayConfig {
         accounts: parsed.channels?.whatsapp?.accounts ?? {},
         allowFrom: parsed.channels?.whatsapp?.allowFrom ?? [],
       },
+      line: {
+        enabled: parsed.channels?.line?.enabled ?? false,
+        accounts: parsed.channels?.line?.accounts ?? {},
+      },
     },
     bindings: parsed.bindings ?? [],
   };
@@ -189,6 +216,19 @@ export function listWhatsAppAccountIds(cfg: GatewayConfig): string[] {
   const accounts = cfg.channels.whatsapp.accounts ?? {};
   const ids = Object.keys(accounts);
   return ids.length > 0 ? ids : [cfg.gateway.accountId];
+}
+
+export function resolveLineAccount(
+  cfg: GatewayConfig,
+  accountId: string,
+): LineAccountConfig {
+  const account = cfg.channels.line?.accounts?.[accountId] ?? {};
+  return {
+    accountId,
+    enabled: account.enabled ?? true,
+    name: account.name,
+    groupPolicy: account.groupPolicy ?? 'disabled',
+  };
 }
 
 export function resolveWhatsAppAccount(
